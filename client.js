@@ -4,6 +4,7 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 const readline = require('readline');
 const fs = require('fs');
+const { showMenu, handleMenuSelection } = require('./client-menu');
 dotenv.config();
 
 // MSAL configuration
@@ -31,22 +32,22 @@ async function getAccessToken() {
 }
 
 async function createContainer(accessToken, containerName) {
+    const url = 'https://graph.microsoft.com/v1.0/storage/fileStorage/containers';
+    const body = {
+        displayName: containerName,
+        description: `${containerName} description`,
+        containerTypeId: process.env.CONTAINER_TYPE_ID,
+    };
+
     try {
-        const response = await axios.post(
-            'https://graph.microsoft.com/v1.0/storage/fileStorage/containers',
-            {
-                displayName: containerName,
-                description: `${containerName} description`,
-                containerTypeId: process.env.CONTAINER_TYPE_ID,
+        const response = await axios.post(url, body, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
             },
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json',
-                },
-            }
-        );
+        });
         console.log('Container created:', response.data);
+        console.log(`HTTP Method: POST\nURL: ${url}\nBody:`, JSON.stringify(body, null, 2));
         return response.data;
     } catch (error) {
         console.error('Error creating container:', error.response?.data || error);
@@ -54,20 +55,47 @@ async function createContainer(accessToken, containerName) {
     }
 }
 
-async function listContainers(accessToken) {
+async function grantContainerPermission(accessToken, containerId, email) {
+    const url = `https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/permissions`;
+    const body = {
+        roles: ["owner"],
+        grantedToV2: {
+            user: {
+                userPrincipalName: email,
+            },
+        },
+    };
+
     try {
-        const response = await axios.get(
-            'https://graph.microsoft.com/v1.0/storage/fileStorage/containers',
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                params: {
-                    $filter: `containerTypeId eq ${process.env.CONTAINER_TYPE_ID}`,
-                },
-            }
-        );
+        const response = await axios.post(url, body, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        console.log(`Permission granted successfully to ${email}.`);
+        console.log(`HTTP Method: POST\nURL: ${url}\nBody:`, JSON.stringify(body, null, 2));
+        return response.data;
+    } catch (error) {
+        console.error("Error granting permission:", error.response?.data || error);
+        throw error;
+    }
+}
+
+async function listContainers(accessToken) {
+    const url = 'https://graph.microsoft.com/v1.0/storage/fileStorage/containers';
+
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+            params: {
+                $filter: `containerTypeId eq ${process.env.CONTAINER_TYPE_ID}`,
+            },
+        });
         console.log('Containers:', response.data.value);
+        console.log(`HTTP Method: GET\nURL: ${url}`);
         return response.data.value;
     } catch (error) {
         console.error('Error listing containers:', error.response?.data || error);
@@ -76,16 +104,16 @@ async function listContainers(accessToken) {
 }
 
 async function listFilesInContainer(accessToken, containerId) {
+    const url = `https://graph.microsoft.com/v1.0/drives/${containerId}/root/children`;
+
     try {
-        const response = await axios.get(
-            `https://graph.microsoft.com/v1.0/drives/${containerId}/root/children`,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                },
-            }
-        );
+        const response = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        });
         console.log('Files in container:', response.data.value);
+        console.log(`HTTP Method: GET\nURL: ${url}`);
         return response.data.value;
     } catch (error) {
         console.error('Error listing files in container:', error.response?.data || error);
@@ -94,21 +122,20 @@ async function listFilesInContainer(accessToken, containerId) {
 }
 
 async function uploadFileToContainer(accessToken, containerId, filePath) {
+    const fileName = filePath.split('/').pop();
+    const url = `https://graph.microsoft.com/v1.0/drives/${containerId}/root:/${fileName}:/content`;
+    const fileData = fs.readFileSync(filePath);
+
     try {
-        const fileName = filePath.split('/').pop();
-        const fileData = fs.readFileSync(filePath);
-        const response = await axios.put(
-            `https://graph.microsoft.com/v1.0/drives/${containerId}/root:/${fileName}:/content`,
-            fileData,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/octet-stream',
-                },
-            }
-        );
+        const response = await axios.put(url, fileData, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/octet-stream',
+            },
+        });
         console.log(`File uploaded: ${response.data.name}`);
         console.log(`Copy this URL into your browser to edit: ${response.data.webUrl}`);
+        console.log(`HTTP Method: PUT\nURL: ${url}`);
         return response.data;
     } catch (error) {
         console.error('Error uploading file:', error.response?.data || error);
@@ -118,110 +145,31 @@ async function uploadFileToContainer(accessToken, containerId, filePath) {
 
 let activeContainer = null;
 
-function showMenu() {
-    console.log("\nSelect an option:");
-    console.log("1. Acquire Access Token");
-    console.log("2. Create a Container");
-    console.log("3. List Containers");
-    console.log("4. Set Active Container");
-    console.log("5. List Files in Active Container");
-    console.log("6. Upload a File to Active Container");
-    console.log("7. Exit");
-}
-
 async function main() {
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
     });
 
-    let accessToken = null;
-
-    const prompt = (query) => new Promise((resolve) => rl.question(query, resolve));
+    let context = {
+        accessToken: null,
+        activeContainer: null,
+        prompt: (query) => new Promise((resolve) => rl.question(query, resolve)),
+        actions: {
+            getAccessToken,
+            createContainer,
+            grantContainerPermission,
+            listContainers,
+            listFilesInContainer,
+            uploadFileToContainer,
+        },
+    };
 
     let exit = false;
     while (!exit) {
         showMenu();
-        const choice = await prompt("Enter your choice: ");
-
-        try {
-            switch (choice) {
-                case "1":
-                    accessToken = await getAccessToken();
-                    break;
-                case "2":
-                    if (!accessToken) {
-                        console.log("Please acquire an access token first (Option 1).\n");
-                        break;
-                    }
-                    const containerName = await prompt("Enter container name: ");
-                    await createContainer(accessToken, containerName);
-                    break;
-                case "3":
-                    if (!accessToken) {
-                        console.log("Please acquire an access token first (Option 1).\n");
-                        break;
-                    }
-                    const containers = await listContainers(accessToken);
-                    console.log('Retrieved containers:', containers);
-                    break;
-                case "4":
-                    if (!accessToken) {
-                        console.log("Please acquire an access token first (Option 1).\n");
-                        break;
-                    }
-                    const containersForSetting = await listContainers(accessToken);
-                    if (containersForSetting.length === 0) {
-                        console.log("No containers available to set as active.\n");
-                        break;
-                    }
-                    console.log("Available Containers:");
-                    containersForSetting.forEach((container, index) => {
-                        console.log(`${index + 1}. ${container.displayName} (ID: ${container.id})`);
-                    });
-                    const selectedIndex = await prompt("Enter the number of the container to set as active: ");
-                    const selectedContainer = containersForSetting[parseInt(selectedIndex, 10) - 1];
-                    if (selectedContainer) {
-                        activeContainer = selectedContainer;
-                        console.log(`Active container set to: ${activeContainer.displayName}`);
-                    } else {
-                        console.log("Invalid selection. Please try again.\n");
-                    }
-                    break;
-                case "5":
-                    if (!accessToken) {
-                        console.log("Please acquire an access token first (Option 1).\n");
-                        break;
-                    }
-                    if (!activeContainer) {
-                        console.log("Please set an active container first (Option 4).\n");
-                        break;
-                    }
-                    const files = await listFilesInContainer(accessToken, activeContainer.id);
-                    console.log('Files in active container:', files);
-                    break;
-                case "6":
-                    if (!accessToken) {
-                        console.log("Please acquire an access token first (Option 1).\n");
-                        break;
-                    }
-                    if (!activeContainer) {
-                        console.log("Please set an active container first (Option 4).\n");
-                        break;
-                    }
-                    const filePath = await prompt("Enter the path to the document to upload (default: SimpleSampleDoc.docx): ") || "SimpleSampleDoc.docx";
-                    await uploadFileToContainer(accessToken, activeContainer.id, filePath);
-                    break;
-                case "7":
-                    exit = true;
-                    console.log("Exiting...");
-                    break;
-                default:
-                    console.log("Invalid choice. Please try again.");
-            }
-        } catch (error) {
-            console.error('Error processing your request:', error);
-        }
+        const choice = await context.prompt("Enter your choice: ");
+        exit = !(await handleMenuSelection(choice, context));
     }
 
     rl.close();
