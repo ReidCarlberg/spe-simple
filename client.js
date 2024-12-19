@@ -23,7 +23,15 @@ async function getAccessToken() {
         const authResult = await clientApp.acquireTokenByClientCredential({
             scopes: ['https://graph.microsoft.com/.default'],
         });
+        // Extract relevant details from the auth result
+        const accessToken = authResult.accessToken;
+        const expiresOn = new Date(authResult.expiresOn).toLocaleString();
+        const scopes = authResult.scopes.join(', ');
+
         console.log('Access token acquired successfully.');
+        console.log(`Token Expires On: ${expiresOn}`);
+        console.log(`Scopes: ${scopes}`);
+        console.log(`Token (truncated): ${accessToken.substring(0, 20)}...`);
         return authResult.accessToken;
     } catch (error) {
         console.error('Error acquiring token:', error);
