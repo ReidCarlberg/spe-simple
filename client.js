@@ -143,6 +143,56 @@ async function uploadFileToContainer(accessToken, containerId, filePath) {
     }
 }
 
+async function inviteUsersToDocument(accessToken, driveId, itemId, recipients, message, requireSignIn = true, sendInvitation = true, roles = ["read"]) {
+    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/invite`;
+
+    const body = {
+        recipients: recipients.map(email => ({ email })),
+        message: message || "Here's the document we're collaborating on.",
+        requireSignIn,
+        sendInvitation,
+        roles,
+    };
+
+    try {
+        const response = await axios.post(url, body, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        console.log(`Invitation sent successfully to ${recipients.join(", ")}.`);
+        console.log(`HTTP Method: POST\nURL: ${url}\nBody:`, JSON.stringify(body, null, 2));
+        return response.data;
+    } catch (error) {
+        console.error('Error inviting users to document:', error.response?.data || error);
+        throw error;
+    }
+}
+
+async function showPermissionsOnDocument(accessToken, driveId, itemId) {
+    const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/permissions`;
+
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        });
+
+        console.log('Permissions on the active document:');
+        response.data.value.forEach((permission, index) => {
+            console.log(`\nPermission ${index + 1}:`);
+            console.log(JSON.stringify(permission, null, 2));
+        });
+        console.log(`\nHTTP Method: GET\nURL: ${url}`);
+        return response.data.value;
+    } catch (error) {
+        console.error('Error retrieving permissions:', error.response?.data || error);
+        throw error;
+    }
+}
+
 let activeContainer = null;
 
 async function main() {
@@ -154,6 +204,7 @@ async function main() {
     let context = {
         accessToken: null,
         activeContainer: null,
+        activeDocument: null,
         prompt: (query) => new Promise((resolve) => rl.question(query, resolve)),
         actions: {
             getAccessToken,
@@ -162,6 +213,8 @@ async function main() {
             listContainers,
             listFilesInContainer,
             uploadFileToContainer,
+            inviteUsersToDocument,
+            showPermissionsOnDocument,
         },
     };
 
